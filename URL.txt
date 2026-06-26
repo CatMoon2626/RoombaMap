@@ -3,3 +3,6 @@ https://minigrid.farama.org/environments/minigrid/
 
 参考例
 https://github.com/pressi-g/tabular-q-learning
+
+ε-グリーディー法、Q学習　参考git
+https://github.com/Zaaim-Halim/Q-learning_reinforcement-Learning.git
