@@ -8,7 +8,7 @@ public class QLearningMaze2 {
         // 障害物を3つ配置した盤面を作成
         // ※注意: ランダム配置のため、ゴールへの道が完全に塞がれる「クリア不可能な盤面」が生成されることもあります。
         // その場合は何度か再実行してください。
-        Environment env = new Environment(3);
+        Environment env = new Environment(0);
         
         System.out.println("【初期盤面】（Sがスタート、Xが障害物、Fが通過済み）");
         env.printBoard();
@@ -29,6 +29,8 @@ class Environment {
     final int LENGTH = 5;
     final int WIDTH = 5;
     final int SIZE = LENGTH * WIDTH;
+    final int agentRowBegin = LENGTH/2;
+    final int agentColBegin = LENGTH/2;
     
     int[][] map = new int[LENGTH][WIDTH];
     int agentRow = 0;
@@ -49,14 +51,14 @@ class Environment {
             int row = id % WIDTH;
             map[col][row] = 2; // 障害物
         }
-        map[0][0] = 3; //スタート
+        map[agentRowBegin][agentColBegin] = 3; //スタート
         countMax = SIZE - block - 1; //ブロックとスタート以外のマスの数
     }
 
     // エージェントの位置を初期化
     public int reset() {
-        agentRow = 0;
-        agentCol = 0;
+        agentRow = agentRowBegin;
+        agentCol = agentColBegin;
         reset_env();
         return getState();
     }
@@ -65,6 +67,11 @@ class Environment {
     public int getState() {
         return agentRow * WIDTH + agentCol;
     }
+
+    // 現在の移動済みマスの数を取得
+    public int getCount(){return count;}
+
+    public int getMap(){return map[agentRow][agentCol];}
 
     // 行動（0:上, 1:下, 2:左, 3:右）を受け取り、結果を返す
     public StepResult step(int action) {
@@ -78,7 +85,7 @@ class Environment {
 
         // 盤面外に出ようとした場合（壁への衝突）
         if (nextRow < 0 || nextRow >= LENGTH || nextCol < 0 || nextCol >= WIDTH) {
-            return new StepResult(getState(), -10, false); // 動かずペナルティ
+            return new StepResult(getState(), -10, count, false); // 動かずペナルティ
         }
 
         // 移動を反映
@@ -88,15 +95,15 @@ class Environment {
 
         // 移動先のマスに応じた報酬と終了判定
         if (map[agentRow][agentCol] == 3 && count == countMax) {
-            return new StepResult(nextState, 100, true);  // ゴール！
+            return new StepResult(nextState, 100, count, true);  // ゴール！
         } else if (map[agentRow][agentCol] == 2) {
-            return new StepResult(nextState, -100, true); // 障害物に衝突して終了（死亡）
+            return new StepResult(nextState, -100, count, true); // 障害物に衝突して終了（死亡）
         } else if(map[agentRow][agentCol] == 0){ //まだ通っていないところ
             map[agentRow][agentCol] = 1; //通った判定にする
             count++; //カウント
-            return new StepResult(nextState, 0, false);
+            return new StepResult(nextState, 0, count, false);
         } else {
-            return new StepResult(nextState, -1, false);  // 通常の移動（時間ペナルティ）
+            return new StepResult(nextState, -1, count, false);  // 通常の移動（時間ペナルティ）
         }
     }
 
@@ -129,6 +136,7 @@ class Environment {
             int row = i % WIDTH;
             if(map[col][row]==1)
                 map[col][row] = 0; //探索済みをもとに戻す
+            count = 0; //カウントをリセット
         }
     }
 }
@@ -137,11 +145,13 @@ class Environment {
 class StepResult {
     int nextState;
     double reward;
+    int count;
     boolean done;
 
-    public StepResult(int nextState, double reward, boolean done) {
+    public StepResult(int nextState, double reward, int count, boolean done) {
         this.nextState = nextState;
         this.reward = reward;
+        this.count = count;
         this.done = done;
     }
 }
@@ -149,7 +159,7 @@ class StepResult {
 // --- Q学習を行うエージェントクラス ---
 class Agent {
     Environment env;
-    double[][] qTable;
+    double[][][] qTable;
     Random rand = new Random();
 
     // ハイパーパラメータ
@@ -160,24 +170,26 @@ class Agent {
 
     public Agent(Environment env) {
         this.env = env;
-        this.qTable = new double[env.SIZE][4]; // 25状態 × 4行動
+        this.qTable = new double[env.SIZE][env.SIZE+1][4]; // 25状態 × 移動済みマス25カウント × 4行動
     }
 
     // 学習メインループ
     public void train(int episodes) {
         for (int e = 0; e < episodes; e++) {
             int state = env.reset();
+            int count = 0;
             boolean done = false;
 
             while (!done) {
-                int action = chooseAction(state, epsilon);
+                int action = chooseAction(state, count, epsilon);
                 StepResult result = env.step(action);
 
                 // Q値の更新式（ベルマン方程式に基づく）
-                double maxNextQ = getMaxValue(qTable[result.nextState]);
-                qTable[state][action] = qTable[state][action] + alpha * (result.reward + gamma * maxNextQ - qTable[state][action]);
+                double maxNextQ = getMaxValue(qTable[result.nextState][count]);
+                qTable[state][count][action] = qTable[state][count][action] + alpha * (result.reward + gamma * maxNextQ - qTable[state][count][action]);
 
                 state = result.nextState;
+                count = result.count;
                 done = result.done;
             }
         }
@@ -186,6 +198,7 @@ class Agent {
     // 学習結果を使って実際にゴールを目指す
     public void test() {
         int state = env.reset();
+        int count = 0;
         boolean done = false;
         int stepCount = 0;
 
@@ -193,7 +206,8 @@ class Agent {
 
         while (!done && stepCount < loopMax) { // 無限ループ防止のため最大値を決める
             // テスト時は探索（ランダム行動）を行わず、常にQ値が最大の行動を選ぶ
-            int action = chooseAction(state, 0.0); 
+            double epsilon = (env.getMap()==1)?0.3:0; //通ったところなら30パーセントでランダム
+            int action = chooseAction(state,count, epsilon); 
             StepResult result = env.step(action);
             
             System.out.println((stepCount + 1) + "歩目:");
@@ -206,6 +220,7 @@ class Agent {
             }
 
             state = result.nextState;
+            count = result.count;
             done = result.done;
             stepCount++;
         }
@@ -216,16 +231,20 @@ class Agent {
     }
 
     // ε-greedy法による行動選択
-    private int chooseAction(int state, double epsilon) {
+    private int chooseAction(int state, int count, double epsilon) {
         if (rand.nextDouble() < epsilon) {
-            return rand.nextInt(4); // ランダムな行動（探索）
+            do{
+                int nextAction = rand.nextInt(4); // ランダムな行動（探索）
+                if(qTable[state][count][nextAction]<-10) continue; //よくない行動ならやめる
+                return nextAction;
+            }while(true);
         } else {
             // Q値が最大の行動を選択（利用）
             int bestAction = 0;
-            double maxQ = qTable[state][0];
+            double maxQ = qTable[state][count][0];
             for (int i = 1; i < 4; i++) {
-                if (qTable[state][i] > maxQ) {
-                    maxQ = qTable[state][i];
+                if (qTable[state][count][i] > maxQ) {
+                    maxQ = qTable[state][count][i];
                     bestAction = i;
                 }
             }
